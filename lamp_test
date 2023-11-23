@@ -1,0 +1,282 @@
+#include <SPI.h>
+#include <MFRC522.h>
+#include <WiFiManager.h>
+#include <FastLED.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266Ping.h>
+#include <PubSubClient.h>
+
+
+#define NUM_LEDS 6
+#define DATA_PIN D3
+
+
+#define TRIGGER_PIN D1
+
+ 
+#define SS_PIN D8
+#define RST_PIN D0
+
+
+int timeout = 120;
+
+
+//IPAddress ip (8, 8, 8, 8);
+
+
+int brightness = 255;
+CRGB leds[NUM_LEDS];
+
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+
+const char* mqtt_server = "192.168.100.31";
+WiFiClient espClient;
+PubSubClient client(espClient);
+unsigned long lastMsg = 0;
+#define MSG_BUFFER_SIZE  (50)
+char msg[MSG_BUFFER_SIZE];
+int value = 0;
+
+WiFiManager wm;
+
+
+//========================FUNÇÕES DE FADE==============================
+
+void fadeToBlack() {
+  for (int a=255; a!=0; a--){
+    brightness = a;
+    FastLED.show();
+  }
+}
+
+void fadeToLight() {
+  for (int b=0; b!=255; b++){
+    brightness = b;
+    FastLED.show();
+  }
+}
+
+
+
+//========================LEITURA DO CARTAO===========================
+
+void cardRead(){
+  if ( ! mfrc522.PICC_IsNewCardPresent()) 
+  {
+    return;
+  }
+  if ( ! mfrc522.PICC_ReadCardSerial()) 
+  {
+    return;
+  }
+  Serial.print("UID tag :");
+  String content= "";
+  byte letter;
+  for (byte i = 0; i < mfrc522.uid.size; i++) 
+  {
+     Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " ");
+     Serial.print(mfrc522.uid.uidByte[i], HEX);
+     content.concat(String(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "));
+     content.concat(String(mfrc522.uid.uidByte[i], HEX));
+  }
+  Serial.println();
+  Serial.print("Message : ");
+  Serial.print(content);
+  //content.toUpperCase();
+
+//++++++++++++++++++++++++++++++CONTEÚDO DO CARTÃO(CORES)++++++++++++++++++++++++++++++++++++++
+
+  if (content.substring(1) == "f6 33 5b 7b"){
+
+    fadeToBlack();
+          leds[0] = CRGB::DarkMagenta;
+          leds[1] = CRGB::DarkMagenta;
+          FastLED.show();
+          client.publish("lamp/publisher", "magenta");
+    fadeToLight();
+          
+  }
+  
+}
+
+//===========================CALLBACK===========================
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  if ((char)payload[0] == '0') {
+          leds[0] = CRGB::Yellow;
+          leds[1] = CRGB::Yellow;
+          FastLED.show();
+
+          snprintf (msg, MSG_BUFFER_SIZE, "amarelo");                              
+          Serial.print("Message:");                                                           
+          Serial.println(msg);                                                                          
+          client.publish("lamp/color", msg);     
+
+  } 
+  else if ((char)payload[0] == '1') {
+          leds[0] = CRGB::Blue;
+          leds[1] = CRGB::Blue;
+          FastLED.show();
+
+          snprintf (msg, MSG_BUFFER_SIZE, "azul");                              
+          Serial.print("Message:");                                                           
+          Serial.println(msg);                                                                          
+          client.publish("lamp/color", msg);          
+  }
+  else if ((char)payload[0] == '2') {
+          leds[0] = CRGB::White;
+          leds[1] = CRGB::White;
+          FastLED.show();
+
+          snprintf (msg, MSG_BUFFER_SIZE, "Branco");                              
+          Serial.print("Message:");                                                           
+          Serial.println(msg);                                                                          
+          client.publish("lamp/color", msg);          
+  }
+  else if ((char)payload[0] == '3') {
+          leds[0] = CRGB::Pink;
+          leds[1] = CRGB::Pink;
+          FastLED.show();
+
+          snprintf (msg, MSG_BUFFER_SIZE, "rosa");                              
+          Serial.print("Message:");                                                           
+          Serial.println(msg);                                                                          
+          client.publish("lamp/color", msg);          
+  }  
+
+}
+
+//==========================RECONNECT=============================
+
+void reconnect() {
+while (!client.connected()) {                                                                   
+    Serial.print("Aguardando conexão MQTT...");                                                   
+    String clientId = "ESP8266Client";                                       
+    clientId += String(random(0xffff), HEX);                                                      
+    if (client.connect(clientId.c_str())) {                                                       
+      Serial.println("conectado");
+      client.publish("lamp/publisher", "conectado");                                                                
+      client.subscribe("lamp/publisher");                                                         
+    } 
+    
+    else {
+
+      leds[1] = CRGB::Red;
+      leds[0] = CRGB::Red;
+      FastLED.show();   
+                                                                                               
+      Serial.println("falhou (rc=");                                                                
+      Serial.print(client.state()); 
+      Serial.print(")");                                                                                                                 
+      delay(1000);
+      
+      leds[1] = CRGB::Black;
+      leds[0] = CRGB::Black;
+      FastLED.show();                                                                                      
+    }
+  }
+}
+
+
+//==========================SETUP===========================
+
+
+void setup() 
+{          
+
+  //wm.resetSettings();
+  WiFi.mode(WIFI_STA);
+  
+  pinMode(TRIGGER_PIN, INPUT_PULLUP);
+  
+  Serial.begin(9600);  
+  
+  SPI.begin();     
+  mfrc522.PCD_Init(); 
+  Serial.println("\n Iniciando...");
+  Serial.println();
+  
+  FastLED.addLeds<WS2812,DATA_PIN,BRG>(leds,NUM_LEDS);
+  FastLED.setBrightness(brightness);
+
+/*
+  leds[0] = CRGB::Black;
+  leds[1] = CRGB::Black;
+  FastLED.show();
+*/
+  
+//    bool ret = Ping.ping(ip);
+    bool res;
+     res = wm.autoConnect("Luminária");
+    // res = wm.autoConnect("AutoConnectAP"); // anonymous ap
+    //res = wm.autoConnect("Luminária", "pass"); // password protected ap
+ /*   if (WiFi.status() != WL_CONNECTED){
+       if(!ret){
+        for (int u =0; u!=6; u++){
+        delay(500);
+        leds[0] = CRGB::Red;
+        leds[1] = CRGB::Red;  
+        FastLED.show(); 
+        delay(500);
+        leds[0] = CRGB::Black;
+        leds[1] = CRGB::Black;
+        FastLED.show();
+        }
+    }
+
+
+ }*/
+      if(!res) {
+        Serial.println("Failed to connect");
+        // ESP.restart();        
+
+    } 
+    else{
+        //if you get here you have connected to the WiFi    
+        Serial.println("connected...yeey :)");
+
+
+        for (int j=0; j!=6; j++) {
+          delay(200);
+          leds[0] = CRGB::Green;
+          leds[1] = CRGB::Green;
+          FastLED.show();
+          delay(200);
+          leds[0] = CRGB::Black;
+          leds[1] = CRGB::Black;
+          FastLED.show();
+        }
+
+        
+
+      }
+          delay(200);
+          leds[0] = CRGB::White;
+          leds[1] = CRGB::White;
+          FastLED.show();
+
+          client.setServer(mqtt_server, 1883);
+          client.setCallback(callback);
+}
+
+//==============================LOOP==================================
+
+void loop() {
+      
+  cardRead();
+  
+  if (!client.connected()) {                                                                      
+    reconnect();                                                                                  
+  }
+  client.loop(); 
+  
+}
